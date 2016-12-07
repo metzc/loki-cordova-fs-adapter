@@ -1,5 +1,39 @@
 "use strict";
 
+function binString(data, options) {
+  // Set default options
+  options = options || {};
+  if (Array.isArray(data)) {
+    data = new Buffer(data);
+  } else if (typeof data == 'number') {
+    data = new Buffer(data.toString(16), 'hex');
+  } else if (typeof data == 'string') {
+    if (!options.in) {
+      // Quack, quack! Duck-type the input
+      if (data.slice(0,2) == '0x') {
+        data = new Buffer(data.slice(2), 'hex');
+      } else {
+        // Binary string
+        data = new Buffer(data, 'binary');
+      }
+    } else {
+      data = new Buffer(data, options.in);
+    }
+  }
+  if (!options.out) options.out = 'utf8';
+  
+  // Convert
+  switch (options.out) {
+    case 'hex':
+    case 'binary':
+    case 'utf8':
+    case 'base64':
+      return data.toString(options.out);
+    default:
+      throw new Error('Output format "'+options.out+'" not understood');
+  }
+};
+
 var _createClass = (function () { function defineProperties(target, props) { for (var key in props) { var prop = props[key]; prop.configurable = true; if (prop.value) prop.writable = true; } Object.defineProperties(target, props); } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; })();
 
 var _inherits = function (subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) subClass.__proto__ = superClass; };
@@ -62,15 +96,37 @@ var LokiCordovaFSAdapter = (function () {
                     fileEntry.file(function (file) {
                         var reader = new FileReader();
                         reader.onloadend = function (event) {
-                            var contents = event.target.result;
-                            if (contents.length === 0) {
-                                console.warn(TAG, "couldn't find database");
+                            if(event.target.error) {
+                                console.warn(TAG, event.target.error)
                                 callback(null);
-                            } else {
-                                callback(contents);
+                            }
+                            else {
+                                // because we read the file as binary string we have to convert it now
+                                var contents = binString(event.target.result, {
+                                    in: 'binary',
+                                    out: 'utf8'
+                                });
+         
+                                if (contents.length === 0) {
+                                    console.warn(TAG, "couldn't find database");
+                                    callback(null);
+                                } else {
+                                    var n = contents.indexOf('}{"filename":');
+                                    if (n === -1) {
+                                        callback(contents);
+                                    } else {
+                                        var newContents = contents.substring(0, n + 1);
+                                        callback(newContents);
+                                    }
+                                }
                             }
                         };
-                        reader.readAsText(file);
+                        reader.onerror = function(event) {
+                            console.warn(TAG, event);
+                            callback(null);
+                        }
+                        // changed from readAsText - this randomly crashed on reading our db with arabic content
+                        reader.readAsBinaryString(file);
                     }, function (err) {
                         console.error(TAG, "error reading file", err);
                         callback(new LokiCordovaFSAdapterError("Unable to read file" + err.message));
@@ -88,9 +144,9 @@ var LokiCordovaFSAdapter = (function () {
                 window.resolveLocalFileSystemURL(cordova.file.dataDirectory, function (dir) {
                     var fileName = _this.options.prefix + "__" + dbname;
                     // Very important to have { create: true }
-                    dir.getFile(fileName, { create: true }, function(fileEntry) {
-                        fileEntry.remove(function() {
-                          callback();
+                    dir.getFile(fileName, { create: true }, function (fileEntry) {
+                        fileEntry.remove(function () {
+                            callback();
                         }, function (err) {
                             console.error(TAG, "error delete file", err);
                             throw new LokiCordovaFSAdapterError("Unable delete file" + JSON.stringify(err));
